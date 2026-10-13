@@ -1,6 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>{{ session.title }}</h1>
+<p>Status: <strong>{{ session.state }}</strong></p>
+{% if session.state == "waiting" %}
+<form method="post" action="{% url 'start_talk' session.pk %}">{% csrf_token %}<button type="submit">Start talk</button></form>
+{% elif session.state == "live" %}
+<form method="post" action="{% url 'end_talk' session.pk %}">{% csrf_token %}<button type="submit">End talk</button></form>
+<div id="signal" style="height:24px;margin:12px 0;background:#2a9d4a"></div>
+<script>
+setInterval(function () {
+  fetch("{% url 'signal' session.pk %}").then(function (r) { return r.json(); }).then(function (d) {
+    document.getElementById("signal").style.background = d.level === "red" ? "#d62828" : "#2a9d4a";
+    if (d.state !== "live") { location.reload(); }
+  });
+}, 3000);
+</script>
+{% elif session.state == "form_open" %}
+<p>The feedback form is open for listeners for 10 minutes after End talk.</p>
+{% else %}
+<p>This session is closed.</p>
+{% endif %}
 <p>Listeners join with this link:</p>
 <p><a href="{{ join_url }}">{{ join_url }}</a></p>
 <div>{{ qr_svg|safe }}</div>

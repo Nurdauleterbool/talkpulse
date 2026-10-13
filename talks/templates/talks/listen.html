@@ -2,5 +2,32 @@
 {% block content %}
 <h1>{{ session.title }}</h1>
 <p>You joined as <strong>{{ listener.display_name }}</strong>.</p>
+{% if session.state == "waiting" %}
 <p>Waiting for the talk to start.</p>
+{% elif session.state == "live" %}
+<form id="rx">{% csrf_token %}</form>
+{% for value, label in reactions %}
+<p><button class="reaction" data-kind="{{ value }}" style="width:100%;padding:16px;font-size:18px">{{ label }}</button></p>
+{% endfor %}
+<p id="msg"></p>
+<script>
+const token = document.querySelector("#rx [name=csrfmiddlewaretoken]").value;
+const msg = document.getElementById("msg");
+document.querySelectorAll(".reaction").forEach(function (b) {
+  b.addEventListener("click", function () {
+    fetch("{% url 'react' session.join_code %}", {
+      method: "POST",
+      headers: {"X-CSRFToken": token, "Content-Type": "application/x-www-form-urlencoded"},
+      body: "kind=" + encodeURIComponent(b.dataset.kind)
+    }).then(function (r) {
+      msg.textContent = r.ok ? "Sent: " + b.textContent : "The talk is not live any more.";
+    });
+  });
+});
+</script>
+{% elif session.state == "form_open" %}
+<p>The talk has ended. The feedback form is open.</p>
+{% else %}
+<p>This session is closed.</p>
+{% endif %}
 {% endblock %}

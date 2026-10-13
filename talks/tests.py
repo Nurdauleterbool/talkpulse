@@ -153,3 +153,204 @@ def test_session_screen_without_joining_redirects_to_join(client, talk):
 @pytest.mark.django_db
 def test_listener_without_name_displays_as_anonymous(talk):
     assert Listener(session=talk, name="").display_name == "Anonymous"
+
+
+from datetime import timedelta
+
+from django.test import Client
+from django.utils import timezone
+
+from talks.models import REACTIONS, Reaction
+
+
+@pytest.fixture
+def owner_client(talk):
+    c = Client()
+    c.force_login(talk.owner)
+    return c
+
+
+@pytest.mark.django_db
+def test_new_session_is_waiting(talk):
+    assert talk.state == "waiting"
+
+
+@pytest.mark.django_db
+def test_start_talk_goes_live(owner_client, talk):
+    owner_client.post(reverse("start_talk", args=[talk.pk]))
+    talk.refresh_from_db()
+    assert talk.state == "live"
+    assert talk.started_at is not None
+
+
+@pytest.mark.django_db
+def test_start_twice_keeps_first_time(owner_client, talk):
+    owner_client.post(reverse("start_talk", args=[talk.pk]))
+    talk.refresh_from_db()
+    first = talk.started_at
+    owner_client.post(reverse("start_talk", args=[talk.pk]))
+    talk.refresh_from_db()
+    assert talk.started_at == first
+
+
+@pytest.mark.django_db
+def test_end_talk_opens_form(owner_client, talk):
+    owner_client.post(reverse("start_talk", args=[talk.pk]))
+    owner_client.post(reverse("end_talk", args=[talk.pk]))
+    talk.refresh_from_db()
+    assert talk.state == "form_open"
+    assert talk.ended_at is not None
+
+
+@pytest.mark.django_db
+def test_end_before_start_does_nothing(owner_client, talk):
+    owner_client.post(reverse("end_talk", args=[talk.pk]))
+    talk.refresh_from_db()
+    assert talk.state == "waiting"
+    assert talk.ended_at is None
+
+
+@pytest.mark.django_db
+def test_form_stays_open_ten_minutes_then_closes(talk):
+    talk.started_at = timezone.now() - timedelta(minutes=30)
+    talk.ended_at = timezone.now() - timedelta(minutes=9)
+    assert talk.state == "form_open"
+    talk.ended_at = timezone.now() - timedelta(minutes=11)
+    assert talk.state == "closed"
+
+
+@pytest.mark.django_db
+def test_other_presenter_cannot_start(client, django_user_model, talk):
+    other = django_user_model.objects.create_user("boris", password=PASSWORD)
+    client.force_login(other)
+    r = client.post(reverse("start_talk", args=[talk.pk]))
+    assert r.status_code == 404
+    talk.refresh_from_db()
+    assert talk.state == "waiting"
+
+
+@pytest.mark.django_db
+def test_start_requires_login(client, talk):
+    r = client.post(reverse("start_talk", args=[talk.pk]))
+    assert r.status_code == 302
+    assert "/accounts/login/" in r["Location"]
+
+
+@pytest.mark.django_db
+def test_start_with_get_is_not_allowed(owner_client, talk):
+    assert owner_client.get(reverse("start_talk", args=[talk.pk])).status_code == 405
+
+
+def go_live(talk, seconds_ago=0):
+    talk.started_at = timezone.now() - timedelta(seconds=seconds_ago)
+    talk.save()
+
+
+def joined_client(talk, name="Boris"):
+    c = Client()
+    c.post(reverse("join", args=[talk.join_code]), {"name": name})
+    return c
+
+
+@pytest.mark.django_db
+def test_reaction_is_stored_with_offset(talk):
+    go_live(talk, seconds_ago=125)
+    c = joined_client(talk)
+    r = c.post(reverse("react", args=[talk.join_code]), {"kind": "unclear"})
+    assert r.status_code == 200
+    reaction = Reaction.objects.get()
+    assert reaction.kind == "unclear"
+    assert 125 <= reaction.offset_seconds <= 127
+
+
+@pytest.mark.django_db
+def test_reaction_before_start_is_rejected(talk):
+    c = joined_client(talk)
+    r = c.post(reverse("react", args=[talk.join_code]), {"kind": "unclear"})
+    assert r.status_code == 409
+    assert Reaction.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_reaction_after_end_is_rejected(talk):
+    go_live(talk, seconds_ago=60)
+    talk.ended_at = timezone.now()
+    talk.save()
+    c = joined_client(talk)
+    r = c.post(reverse("react", args=[talk.join_code]), {"kind": "unclear"})
+    assert r.status_code == 409
+    assert Reaction.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_unknown_reaction_is_rejected(talk):
+    go_live(talk)
+    c = joined_client(talk)
+    r = c.post(reverse("react", args=[talk.join_code]), {"kind": "boo"})
+    assert r.status_code == 400
+    assert Reaction.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_reaction_without_joining_is_rejected(client, talk):
+    go_live(talk)
+    r = client.post(reverse("react", args=[talk.join_code]), {"kind": "unclear"})
+    assert r.status_code == 403
+    assert Reaction.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_listener_sees_five_reaction_buttons(talk):
+    go_live(talk)
+    c = joined_client(talk)
+    html = c.get(reverse("listen", args=[talk.join_code])).content.decode()
+    assert len(REACTIONS) == 5
+    for _, label in REACTIONS:
+        assert label in html
+
+
+def tap_unclear(talk, how_many):
+    for i in range(how_many):
+        listener = Listener.objects.create(session=talk, name=f"L{i}")
+        Reaction.objects.create(session=talk, listener=listener, kind="unclear", offset_seconds=5)
+
+
+@pytest.mark.django_db
+def test_signal_turns_red_when_many_tap_unclear(owner_client, talk):
+    go_live(talk)
+    tap_unclear(talk, 2)
+    url = reverse("signal", args=[talk.pk])
+    assert owner_client.get(url).json()["level"] == "green"
+    tap_unclear(talk, 1)
+    assert owner_client.get(url).json()["level"] == "red"
+
+
+@pytest.mark.django_db
+def test_signal_ignores_old_taps(owner_client, talk):
+    go_live(talk, seconds_ago=300)
+    tap_unclear(talk, 3)
+    Reaction.objects.update(created_at=timezone.now() - timedelta(seconds=120))
+    assert owner_client.get(reverse("signal", args=[talk.pk])).json()["level"] == "green"
+
+
+@pytest.mark.django_db
+def test_signal_shows_no_numbers(owner_client, talk):
+    go_live(talk)
+    tap_unclear(talk, 3)
+    data = owner_client.get(reverse("signal", args=[talk.pk])).json()
+    assert set(data.keys()) == {"level", "state"}
+
+
+@pytest.mark.django_db
+def test_signal_only_for_owner(client, django_user_model, talk):
+    other = django_user_model.objects.create_user("boris", password=PASSWORD)
+    client.force_login(other)
+    assert client.get(reverse("signal", args=[talk.pk])).status_code == 404
+
+
+@pytest.mark.django_db
+def test_live_session_page_has_signal_bar(owner_client, talk):
+    go_live(talk)
+    html = owner_client.get(reverse("session_detail", args=[talk.pk])).content.decode()
+    assert 'id="signal"' in html
+    assert "End talk" in html

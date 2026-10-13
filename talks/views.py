@@ -1,3 +1,7 @@
+from datetime import timedelta
+from django.http import JsonResponse
+from django.utils import timezone
+from django.views.decorators.http import require_POST
 import segno
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
@@ -5,7 +9,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import JoinForm, SessionForm
-from .models import Listener, Session
+from .models import REACTIONS, Listener, Reaction, Session
 
 
 def home(request):
@@ -70,4 +74,66 @@ def listen(request, code):
         listener = Listener.objects.filter(pk=listener_id, session=session).first()
     if listener is None:
         return redirect("join", code=code)
-    return render(request, "talks/listen.html", {"session": session, "listener": listener})
+    return render(request, "talks/listen.html", {"session": session, "listener": listener, "reactions": REACTIONS})
+
+
+SIGNAL_WINDOW = timedelta(seconds=60)
+SIGNAL_THRESHOLD = 3
+
+
+def signal_level(session):
+    if session.state != "live":
+        return "idle"
+    since = timezone.now() - SIGNAL_WINDOW
+    n = (
+        session.reactions.filter(kind="unclear", created_at__gte=since)
+        .values("listener")
+        .distinct()
+        .count()
+    )
+    return "red" if n >= SIGNAL_THRESHOLD else "green"
+
+
+@login_required
+@require_POST
+def start_talk(request, pk):
+    session = get_object_or_404(Session, pk=pk, owner=request.user)
+    if session.state == "waiting":
+        session.started_at = timezone.now()
+        session.save()
+    return redirect("session_detail", pk=pk)
+
+
+@login_required
+@require_POST
+def end_talk(request, pk):
+    session = get_object_or_404(Session, pk=pk, owner=request.user)
+    if session.state == "live":
+        session.ended_at = timezone.now()
+        session.save()
+    return redirect("session_detail", pk=pk)
+
+
+@login_required
+def signal(request, pk):
+    session = get_object_or_404(Session, pk=pk, owner=request.user)
+    return JsonResponse({"level": signal_level(session), "state": session.state})
+
+
+@require_POST
+def react(request, code):
+    session = get_object_or_404(Session, join_code=code)
+    listener_id = request.session.get(f"listener_{session.pk}")
+    listener = None
+    if listener_id:
+        listener = Listener.objects.filter(pk=listener_id, session=session).first()
+    if listener is None:
+        return JsonResponse({"error": "join first"}, status=403)
+    kind = request.POST.get("kind")
+    if kind not in dict(REACTIONS):
+        return JsonResponse({"error": "unknown reaction"}, status=400)
+    if session.state != "live":
+        return JsonResponse({"error": "talk is not live"}, status=409)
+    offset = int((timezone.now() - session.started_at).total_seconds())
+    Reaction.objects.create(session=session, listener=listener, kind=kind, offset_seconds=offset)
+    return JsonResponse({"ok": True, "offset_seconds": offset})
