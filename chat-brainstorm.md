@@ -60,8 +60,7 @@ and right after it.
 7. Results page for the presenter
 
 The first plan had duplicated issues (#2-#5), which were closed as duplicates.
-Seven tasks were kept because the work was done in one session with tests
-after every task.
+Seven tasks were kept in the backlog.
 
 ## Tech stack
 
