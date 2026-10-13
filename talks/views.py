@@ -4,8 +4,8 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import SessionForm
-from .models import Session
+from .forms import JoinForm, SessionForm
+from .models import Listener, Session
 
 
 def home(request):
@@ -45,3 +45,29 @@ def session_detail(request, pk):
         "talks/session_detail.html",
         {"session": session, "join_url": join_url, "qr_svg": qr_svg},
     )
+
+
+def join(request, code):
+    session = get_object_or_404(Session, join_code=code)
+    form = JoinForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        anonymous = form.cleaned_data["anonymous"]
+        listener = Listener.objects.create(
+            session=session,
+            name="" if anonymous else form.cleaned_data["name"].strip(),
+            is_anonymous=anonymous,
+        )
+        request.session[f"listener_{session.pk}"] = listener.pk
+        return redirect("listen", code=session.join_code)
+    return render(request, "talks/join.html", {"session": session, "form": form})
+
+
+def listen(request, code):
+    session = get_object_or_404(Session, join_code=code)
+    listener_id = request.session.get(f"listener_{session.pk}")
+    listener = None
+    if listener_id:
+        listener = Listener.objects.filter(pk=listener_id, session=session).first()
+    if listener is None:
+        return redirect("join", code=code)
+    return render(request, "talks/listen.html", {"session": session, "listener": listener})

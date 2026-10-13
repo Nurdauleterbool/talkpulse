@@ -10,4 +10,6 @@ urlpatterns = [
     path("accounts/", include("django.contrib.auth.urls")),
     path("sessions/new/", views.session_create, name="session_create"),
     path("sessions/<int:pk>/", views.session_detail, name="session_detail"),
+    path("join/<str:code>/", views.join, name="join"),
+    path("join/<str:code>/live/", views.listen, name="listen"),
 ]

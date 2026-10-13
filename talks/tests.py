@@ -83,3 +83,73 @@ def test_other_presenter_cannot_open_session(client, django_user_model):
     client.force_login(other)
     r = client.get(reverse("session_detail", args=[session.pk]))
     assert r.status_code == 404
+
+
+from talks.models import Listener
+
+
+@pytest.fixture
+def talk(django_user_model):
+    user = django_user_model.objects.create_user("anna", password=PASSWORD)
+    return Session.objects.create(owner=user, title="My defense")
+
+
+@pytest.mark.django_db
+def test_join_page_opens_without_login(client, talk):
+    r = client.get(reverse("join", args=[talk.join_code]))
+    assert r.status_code == 200
+    html = r.content.decode()
+    assert "My defense" in html
+    assert 'name="viewport"' in html
+
+
+@pytest.mark.django_db
+def test_unknown_join_code_is_404(client):
+    assert client.get(reverse("join", args=["nope"])).status_code == 404
+
+
+@pytest.mark.django_db
+def test_join_with_name_keeps_the_name(client, talk):
+    client.post(reverse("join", args=[talk.join_code]), {"name": "Boris"})
+    listener = Listener.objects.get()
+    assert listener.name == "Boris"
+    assert listener.is_anonymous is False
+    assert listener.display_name == "Boris"
+
+
+@pytest.mark.django_db
+def test_join_anonymous_is_marked_anonymous(client, talk):
+    client.post(reverse("join", args=[talk.join_code]), {"name": "Boris", "anonymous": "on"})
+    listener = Listener.objects.get()
+    assert listener.is_anonymous is True
+    assert listener.display_name == "Anonymous"
+
+
+@pytest.mark.django_db
+def test_join_without_name_or_anonymous_shows_error(client, talk):
+    r = client.post(reverse("join", args=[talk.join_code]), {"name": "  "})
+    assert r.status_code == 200
+    assert "Enter a name or tick anonymous." in r.content.decode()
+    assert Listener.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_after_join_listener_goes_to_session_screen(client, talk):
+    r = client.post(reverse("join", args=[talk.join_code]), {"name": "Boris"})
+    assert r.status_code == 302
+    assert r["Location"] == reverse("listen", args=[talk.join_code])
+    page = client.get(r["Location"])
+    assert page.status_code == 200
+    assert "Boris" in page.content.decode()
+
+
+@pytest.mark.django_db
+def test_session_screen_without_joining_redirects_to_join(client, talk):
+    r = client.get(reverse("listen", args=[talk.join_code]))
+    assert r.status_code == 302
+    assert r["Location"] == reverse("join", args=[talk.join_code])
+
+
+@pytest.mark.django_db
+def test_listener_without_name_displays_as_anonymous(talk):
+    assert Listener(session=talk, name="").display_name == "Anonymous"
