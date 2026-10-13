@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>New talk session</h1>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Create session</button>
+</form>
+{% endblock %}

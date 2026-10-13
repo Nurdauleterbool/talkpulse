@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>TalkPulse</h1>
+{% if user.is_authenticated %}
+  <p><a href="{% url 'session_create' %}">Create a talk session</a></p>
+  <ul>
+    {% for s in sessions %}
+      <li><a href="{% url 'session_detail' s.pk %}">{{ s.title }}</a></li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>Collect feedback from your audience. <a href="{% url 'signup' %}">Sign up</a> or <a href="{% url 'login' %}">log in</a> as a presenter.</p>
+{% endif %}
+{% endblock %}

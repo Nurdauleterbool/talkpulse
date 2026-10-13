@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ session.title }}</h1>
+<p>Listeners join with this link:</p>
+<p><a href="{{ join_url }}">{{ join_url }}</a></p>
+<div>{{ qr_svg|safe }}</div>
+{% endblock %}
