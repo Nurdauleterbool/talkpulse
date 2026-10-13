@@ -70,3 +70,22 @@ class Reaction(models.Model):
     kind = models.CharField(max_length=20, choices=REACTIONS)
     offset_seconds = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+from django.core.validators import MaxValueValidator, MinValueValidator
+
+
+def _rating():
+    return models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+
+
+class Feedback(models.Model):
+    session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name="feedbacks")
+    listener = models.OneToOneField(Listener, on_delete=models.CASCADE, related_name="feedback")
+    content = _rating()
+    delivery = _rating()
+    slides = _rating()
+    answers = _rating()
+    worked_well = models.TextField(blank=True)
+    to_improve = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

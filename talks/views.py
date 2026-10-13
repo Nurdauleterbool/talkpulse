@@ -1,3 +1,4 @@
+from django.db.models import Avg
 from datetime import timedelta
 from django.http import JsonResponse
 from django.utils import timezone
@@ -8,8 +9,8 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import JoinForm, SessionForm
-from .models import REACTIONS, Listener, Reaction, Session
+from .forms import FeedbackForm, JoinForm, SessionForm
+from .models import REACTIONS, Feedback, Listener, Reaction, Session
 
 
 def home(request):
@@ -137,3 +138,77 @@ def react(request, code):
     offset = int((timezone.now() - session.started_at).total_seconds())
     Reaction.objects.create(session=session, listener=listener, kind=kind, offset_seconds=offset)
     return JsonResponse({"ok": True, "offset_seconds": offset})
+
+
+def _listener(request, session):
+    listener_id = request.session.get(f"listener_{session.pk}")
+    if not listener_id:
+        return None
+    return Listener.objects.filter(pk=listener_id, session=session).first()
+
+
+def feedback(request, code):
+    session = get_object_or_404(Session, join_code=code)
+    listener = _listener(request, session)
+    if listener is None:
+        return redirect("join", code=code)
+    if session.state != "form_open":
+        return render(
+            request,
+            "talks/message.html",
+            {"session": session, "message": "The feedback form is not open now."},
+            status=403,
+        )
+    if Feedback.objects.filter(listener=listener).exists():
+        return render(
+            request,
+            "talks/message.html",
+            {"session": session, "message": "Thank you! You have already sent your feedback."},
+        )
+    form = FeedbackForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        obj = form.save(commit=False)
+        obj.session = session
+        obj.listener = listener
+        obj.save()
+        return redirect("feedback", code=code)
+    return render(request, "talks/feedback.html", {"session": session, "form": form})
+
+
+@login_required
+def results(request, pk):
+    session = get_object_or_404(Session, pk=pk, owner=request.user)
+    if session.ended_at is None:
+        return redirect("session_detail", pk=pk)
+    kinds = [k for k, _ in REACTIONS]
+    data = list(session.reactions.values_list("offset_seconds", "kind"))
+    length = int((session.ended_at - session.started_at).total_seconds() // 60) + 1
+    last = max([o // 60 for o, _ in data], default=0)
+    grid = [[0] * len(kinds) for _ in range(max(length, last + 1))]
+    for offset, kind in data:
+        grid[offset // 60][kinds.index(kind)] += 1
+    rows = [{"minute": i, "cells": cells} for i, cells in enumerate(grid)]
+    avg = session.feedbacks.aggregate(
+        content=Avg("content"), delivery=Avg("delivery"), slides=Avg("slides"), answers=Avg("answers")
+    )
+    ratings = [
+        ("Content", avg["content"]),
+        ("Delivery", avg["delivery"]),
+        ("Slides", avg["slides"]),
+        ("Answers to questions", avg["answers"]),
+    ]
+    comments = [
+        {"author": f.listener.display_name, "worked_well": f.worked_well, "to_improve": f.to_improve}
+        for f in session.feedbacks.select_related("listener")
+    ]
+    return render(
+        request,
+        "talks/results.html",
+        {
+            "session": session,
+            "rows": rows,
+            "labels": [label for _, label in REACTIONS],
+            "ratings": ratings,
+            "comments": comments,
+        },
+    )

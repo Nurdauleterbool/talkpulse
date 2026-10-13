@@ -16,4 +16,6 @@ urlpatterns = [
     path("sessions/<int:pk>/start/", views.start_talk, name="start_talk"),
     path("sessions/<int:pk>/end/", views.end_talk, name="end_talk"),
     path("sessions/<int:pk>/signal/", views.signal, name="signal"),
+    path("join/<str:code>/feedback/", views.feedback, name="feedback"),
+    path("sessions/<int:pk>/results/", views.results, name="results"),
 ]

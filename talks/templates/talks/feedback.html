@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ session.title }}</h1>
+<p>Feedback (1 = poor, 5 = great)</p>
+<form method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Send feedback</button>
+</form>
+{% endblock %}

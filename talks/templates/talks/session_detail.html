@@ -20,6 +20,7 @@ setInterval(function () {
 {% else %}
 <p>This session is closed.</p>
 {% endif %}
+{% if session.ended_at %}<p><a href="{% url 'results' session.pk %}">Open results</a></p>{% endif %}
 <p>Listeners join with this link:</p>
 <p><a href="{{ join_url }}">{{ join_url }}</a></p>
 <div>{{ qr_svg|safe }}</div>

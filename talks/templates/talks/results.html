@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Results: {{ session.title }}</h1>
+
+<h2>Reactions by minute</h2>
+<div style="overflow-x:auto">
+<table border="1" cellpadding="4">
+  <tr><th>Minute</th>{% for l in labels %}<th>{{ l }}</th>{% endfor %}</tr>
+  {% for row in rows %}
+  <tr><td>{{ row.minute }}</td>{% for c in row.cells %}<td>{{ c }}</td>{% endfor %}</tr>
+  {% endfor %}
+</table>
+</div>
+
+<h2>Average ratings</h2>
+<ul>
+  {% for label, value in ratings %}
+  <li>{{ label }}: {% if value is None %}no ratings yet{% else %}{{ value|floatformat:1 }}{% endif %}</li>
+  {% endfor %}
+</ul>
+
+<h2>Comments</h2>
+{% for c in comments %}
+<p><strong>{{ c.author }}</strong><br>
+Worked well: {{ c.worked_well }}<br>
+To improve: {{ c.to_improve }}</p>
+{% empty %}
+<p>No comments yet.</p>
+{% endfor %}
+{% endblock %}

@@ -26,7 +26,7 @@ document.querySelectorAll(".reaction").forEach(function (b) {
 });
 </script>
 {% elif session.state == "form_open" %}
-<p>The talk has ended. The feedback form is open.</p>
+<p>The talk has ended. <a href="{% url 'feedback' session.join_code %}">Open the feedback form</a></p>
 {% else %}
 <p>This session is closed.</p>
 {% endif %}

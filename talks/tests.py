@@ -354,3 +354,154 @@ def test_live_session_page_has_signal_bar(owner_client, talk):
     html = owner_client.get(reverse("session_detail", args=[talk.pk])).content.decode()
     assert 'id="signal"' in html
     assert "End talk" in html
+
+
+from talks.models import Feedback
+
+FB = {"content": 5, "delivery": 4, "slides": 3, "answers": 2, "worked_well": "Clear", "to_improve": "Slower"}
+
+
+def open_form(talk, ended_minutes_ago=1):
+    talk.started_at = timezone.now() - timedelta(minutes=20)
+    talk.ended_at = timezone.now() - timedelta(minutes=ended_minutes_ago)
+    talk.save()
+
+
+@pytest.mark.django_db
+def test_feedback_form_shows_fields(talk):
+    open_form(talk)
+    c = joined_client(talk)
+    html = c.get(reverse("feedback", args=[talk.join_code])).content.decode()
+    assert "What worked well" in html
+    assert "What to improve" in html
+    assert 'name="content"' in html
+
+
+@pytest.mark.django_db
+def test_feedback_is_saved(talk):
+    open_form(talk)
+    c = joined_client(talk)
+    c.post(reverse("feedback", args=[talk.join_code]), FB)
+    f = Feedback.objects.get()
+    assert (f.content, f.delivery, f.slides, f.answers) == (5, 4, 3, 2)
+    assert f.worked_well == "Clear"
+    assert f.to_improve == "Slower"
+
+
+@pytest.mark.django_db
+def test_feedback_only_once(talk):
+    open_form(talk)
+    c = joined_client(talk)
+    url = reverse("feedback", args=[talk.join_code])
+    c.post(url, FB)
+    c.post(url, {**FB, "content": 1})
+    assert Feedback.objects.count() == 1
+    assert Feedback.objects.get().content == 5
+
+
+@pytest.mark.django_db
+def test_feedback_not_available_before_end(talk):
+    go_live(talk)
+    c = joined_client(talk)
+    url = reverse("feedback", args=[talk.join_code])
+    assert c.get(url).status_code == 403
+    assert c.post(url, FB).status_code == 403
+    assert Feedback.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_feedback_not_available_after_close(talk):
+    open_form(talk, ended_minutes_ago=11)
+    c = joined_client(talk)
+    assert c.post(reverse("feedback", args=[talk.join_code]), FB).status_code == 403
+    assert Feedback.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_rating_out_of_range_rejected(talk):
+    open_form(talk)
+    c = joined_client(talk)
+    r = c.post(reverse("feedback", args=[talk.join_code]), {**FB, "content": 6})
+    assert r.status_code == 200
+    assert Feedback.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_missing_rating_rejected(talk):
+    open_form(talk)
+    c = joined_client(talk)
+    data = {k: v for k, v in FB.items() if k != "slides"}
+    r = c.post(reverse("feedback", args=[talk.join_code]), data)
+    assert r.status_code == 200
+    assert Feedback.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_feedback_requires_joining(client, talk):
+    open_form(talk)
+    r = client.get(reverse("feedback", args=[talk.join_code]))
+    assert r.status_code == 302
+    assert r["Location"] == reverse("join", args=[talk.join_code])
+
+
+def add_listener(talk, name, anonymous=False):
+    return Listener.objects.create(session=talk, name=name, is_anonymous=anonymous)
+
+
+@pytest.mark.django_db
+def test_results_show_averages_and_comments(owner_client, talk):
+    open_form(talk)
+    Feedback.objects.create(session=talk, listener=add_listener(talk, "Boris"), content=5, delivery=4,
+                            slides=3, answers=2, worked_well="Great pace", to_improve="More examples")
+    Feedback.objects.create(session=talk, listener=add_listener(talk, "Secret", True), content=3, delivery=4,
+                            slides=3, answers=2, worked_well="Nice", to_improve="Shorter")
+    html = owner_client.get(reverse("results", args=[talk.pk])).content.decode()
+    assert "Content: 4.0" in html
+    assert "Great pace" in html
+    assert "Boris" in html
+    assert "Anonymous" in html
+    assert "Secret" not in html
+
+
+@pytest.mark.django_db
+def test_results_timeline_by_minute(owner_client, talk):
+    open_form(talk)
+    l = add_listener(talk, "Boris")
+    Reaction.objects.create(session=talk, listener=l, kind="unclear", offset_seconds=10)
+    Reaction.objects.create(session=talk, listener=l, kind="too_fast", offset_seconds=70)
+    rows = owner_client.get(reverse("results", args=[talk.pk])).context["rows"]
+    assert rows[0]["minute"] == 0 and rows[0]["cells"][0] == 1
+    assert rows[1]["minute"] == 1 and rows[1]["cells"][1] == 1
+    assert sum(sum(r["cells"]) for r in rows) == 2
+
+
+@pytest.mark.django_db
+def test_results_without_feedback_still_open(owner_client, talk):
+    open_form(talk)
+    r = owner_client.get(reverse("results", args=[talk.pk]))
+    assert r.status_code == 200
+    assert "No comments yet." in r.content.decode()
+
+
+@pytest.mark.django_db
+def test_results_only_for_owner(client, django_user_model, talk):
+    open_form(talk)
+    other = django_user_model.objects.create_user("boris", password=PASSWORD)
+    client.force_login(other)
+    assert client.get(reverse("results", args=[talk.pk])).status_code == 404
+
+
+@pytest.mark.django_db
+def test_results_require_login(client, talk):
+    open_form(talk)
+    r = client.get(reverse("results", args=[talk.pk]))
+    assert r.status_code == 302
+    assert "/accounts/login/" in r["Location"]
+
+
+@pytest.mark.django_db
+def test_results_before_end_redirect_to_session(owner_client, talk):
+    go_live(talk)
+    r = owner_client.get(reverse("results", args=[talk.pk]))
+    assert r.status_code == 302
+    assert r["Location"] == reverse("session_detail", args=[talk.pk])
